@@ -10,12 +10,14 @@ const preference = {
 };
 const randomKey = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('');
 const roomPattern = /^[a-f0-9]{48}$/;
-const sharedRoom = location.hash.slice(1);
-const previousRoom = preference.get('catalog');
-const room = roomPattern.test(sharedRoom) ? sharedRoom : roomPattern.test(previousRoom || '') ? previousRoom : randomKey();
-preference.set('catalog', room);
-history.replaceState(null, '', location.pathname + location.search + '#' + room);
-window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== room) location.reload(); });
+function roomFromURL() {
+  const invitation = location.hash.slice(1);
+  return roomPattern.test(invitation) ? invitation : window.GIFTBOOK_FAMILY_ROOM;
+}
+const room = roomFromURL();
+const invitationHash = room === window.GIFTBOOK_FAMILY_ROOM ? '' : '#' + room;
+history.replaceState(null, '', location.pathname + location.search + invitationHash);
+window.addEventListener('hashchange', () => location.reload());
 
 const shared = Boolean(window.GIFTBOOK_API_ORIGIN);
 const api = (window.GIFTBOOK_API_ORIGIN || location.origin) + '/api/' + room + '/ideas';
@@ -25,7 +27,7 @@ let draft, selected, photoWork = 0, photoPending = false, saving = false, toastT
 const editStorage = id => 'edit.' + room + '.' + id;
 const money = cents => '$' + (cents / 100).toLocaleString(undefined, {minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2});
 const personKey = name => name.normalize('NFC').trim().toLowerCase();
-const shareLink = () => location.href.split('#')[0] + '#' + room;
+const shareLink = () => location.origin + location.pathname + invitationHash;
 
 function toast(message) {
   byId('toast').textContent = message;
@@ -338,7 +340,7 @@ for (const el of document.querySelectorAll('[data-close]')) el.addEventListener(
 for (const id of ['add','empty-action']) byId(id).addEventListener('click', () => openEditor());
 byId('all-people').addEventListener('click', () => history.back());
 window.addEventListener('popstate', event => {
-  if (location.hash.slice(1) === room) openPerson(event.state?.wishPerson || '');
+  if (roomFromURL() === room) openPerson(event.state?.wishPerson || '');
 });
 let previewTimer;
 form.elements.url.addEventListener('input', () => {
