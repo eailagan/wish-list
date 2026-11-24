@@ -12,10 +12,10 @@ export default {
     if (pathname.startsWith('/api/')) return serveCatalog(request, env);
     if (request.method === 'GET' || request.method === 'HEAD') {
       if (pathname === '/' || pathname === '/index.html') {
-        return Response.redirect('https://eailagan.github.io/eailagan/', 302);
+        return Response.redirect('https://eailagan.github.io/wish-list/', 302);
       }
       if (pathname === '/favicon.ico') {
-        return Response.redirect('https://eailagan.github.io/eailagan/giftbook.svg', 302);
+        return Response.redirect('https://eailagan.github.io/wish-list/giftbook.svg', 302);
       }
     }
     return new Response('Not found', {status:404});
