@@ -211,7 +211,7 @@ async function catalogPage(bucket, prefix, url) {
     }
     const stored = await bucket.get(object.key);
     if (!stored) return null;
-    const idea = await stored.json();
+    const {buyerHash, ...idea} = await stored.json();
     if (namesOnly) return idea.person;
     return !person || normalizePerson(idea.person) === person ? idea : null;
   }));
@@ -220,10 +220,37 @@ async function catalogPage(bucket, prefix, url) {
   return json({...payload, cursor:page.truncated ? page.cursor : null});
 }
 
+async function purchaseStatus(request, bucket, key) {
+  const method = request.method;
+  if (!['GET', 'PUT', 'DELETE'].includes(method)) throw new InputError('Unsupported operation.', 405);
+  const stored = await bucket.get(key);
+  if (!stored) throw new InputError('This gift is no longer on the list.', 404);
+  const record = await stored.json();
+  const buyer = method === 'GET' && !request.headers.has('X-Edit-Key') ? null : await editHash(request);
+  const bought = Boolean(record.buyerHash);
+  const yours = bought && record.buyerHash === buyer;
+  if (method === 'GET' || (method === 'PUT' && bought) || (method === 'DELETE' && !bought)) {
+    return json({bought, yours});
+  }
+  if (method === 'DELETE' && !yours) throw new InputError('Only the buyer can undo this mark.', 403);
+  if (method === 'PUT') record.buyerHash = buyer;
+  else delete record.buyerHash;
+  const updated = await bucket.put(key, JSON.stringify(record), {
+    onlyIf: {etagMatches: stored.etag},
+    customMetadata: stored.customMetadata,
+    httpMetadata: stored.httpMetadata
+  });
+  if (!updated) throw new InputError('This gift changed. Check its purchase status again.', 409);
+  return json({bought: method === 'PUT', yours: method === 'PUT'});
+}
+
 async function handle(request, env, url) {
   const [, , room, resource, id, extra] = url.pathname.split('/');
   if (!roomPattern.test(room) || extra !== undefined) throw new InputError('Catalog not found.', 404);
   if (resource === 'preview' && !id && request.method === 'POST') return linkPreview(request, url);
+  if (resource === 'purchases' && idPattern.test(id || '')) {
+    return purchaseStatus(request, env.BUCKET, 'catalog/' + room + '/' + id);
+  }
   if (resource !== 'ideas' || (id !== undefined && !idPattern.test(id))) {
     throw new InputError('Catalog not found.', 404);
   }
@@ -235,7 +262,7 @@ async function handle(request, env, url) {
   if (!id || !['PUT', 'DELETE'].includes(request.method)) throw new InputError('Unsupported operation.', 405);
   const hash = await editHash(request);
   const key = prefix + id;
-  const current = await bucket.head(key);
+  const current = await bucket.get(key);
   if (current && current.customMetadata?.editHash !== hash) throw new InputError('Only the browser that added this idea can edit it.', 403);
   if (request.method === 'DELETE') {
     if (current) await bucket.delete(key);
@@ -244,7 +271,9 @@ async function handle(request, env, url) {
   const data = validate(await readBody(request));
   const created = current?.customMetadata?.created || new Date().toISOString();
   const idea = {id, created, ...data};
-  const written = await bucket.put(key, JSON.stringify(idea), {
+  const buyerHash = current && (await current.json()).buyerHash;
+  const record = buyerHash ? {...idea, buyerHash} : idea;
+  const written = await bucket.put(key, JSON.stringify(record), {
     onlyIf: current ? {etagMatches: current.etag} : {etagDoesNotMatch: '*'},
     customMetadata: {editHash: hash, created, person: encodeURIComponent(data.person)},
     httpMetadata: {contentType: 'application/json'}

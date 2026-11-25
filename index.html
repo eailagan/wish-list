@@ -9,10 +9,10 @@
   <meta name="description" content="A shared Christmas wish list for the family.">
   <title>Christmas Wish List</title>
   <link rel="icon" href="./giftbook.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./app.css?v=4">
+  <link rel="stylesheet" href="./app.css?v=5">
   <script defer src="./config.js?v=3"></script>
   <script defer src="./device-store.js?v=2"></script>
-  <script defer src="./app.js?v=5"></script>
+  <script defer src="./app.js?v=6"></script>
 </head>
 <body>
   <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -29,7 +29,7 @@
   </svg>
   <main class="wrap">
     <section class="hero" aria-labelledby="page-title">
-      <h1 id="page-title">Christmas Wish List</h1>
+      <h1 id="page-title"><img src="./christmas-wish-list.svg" alt="Christmas Wish List" width="4470" height="2388"></h1>
       <button id="add" class="primary"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>Add gift idea</button>
     </section>
     <section class="collection" aria-labelledby="collection-title">
@@ -74,6 +74,11 @@
     <div class="dialog-head"><span class="detail-person" id="detail-person"></span><button class="icon-btn" data-close aria-label="Close"><svg class="icon"><use href="#close"/></svg></button></div>
     <img id="detail-image" class="detail-image" alt="" hidden><h2 id="detail-title"></h2><p id="detail-price"></p><p id="detail-notes"></p>
     <div class="detail-actions"><a id="detail-link" class="primary" target="_blank" rel="noopener noreferrer" hidden>View product</a><button class="secondary" id="edit" hidden>Edit idea</button></div>
+    <details id="purchase" hidden>
+      <summary>Check purchase status</summary>
+      <p id="purchase-status" role="status"></p>
+      <button class="secondary" type="button" id="purchase-action" hidden></button>
+    </details>
   </dialog>
   <dialog id="share-dialog" aria-labelledby="share-title">
     <div class="dialog-head"><h2 id="share-title">Share list</h2><button class="icon-btn" data-close aria-label="Close"><svg class="icon"><use href="#close"/></svg></button></div>

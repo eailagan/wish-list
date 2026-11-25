@@ -19,26 +19,16 @@ svg{fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-l
 .secondary:hover,.photo-label:hover,.icon-btn:hover{background:#f5f5f5}
 .hero {
   display: grid;
-  container-type: inline-size;
   justify-items: center;
   gap: clamp(1rem, 2vw, 1.75rem);
   margin: clamp(20px,3.4vw,44px) 0 clamp(30px,4vw,56px);
-  padding: clamp(1.75rem, 4vw, 3.5rem) clamp(1rem, 3vw, 2.5rem);
-  background: #efefef;
-  border-radius: 16px;
+  padding-top: clamp(.5rem, 1vw, 1rem);
   text-align: center;
 }
 h1,h2,p{margin:0}
 h1,h2{font-weight:var(--strong);line-height:1.25;letter-spacing:normal}
-.hero h1 {
-  width: 100%;
-  font-family: "medusa", "Snell Roundhand", "Apple Chancery", "URW Chancery L", Georgia, serif;
-  font-weight: 400;
-  font-size: clamp(1.5rem, 9.8vw, 7.75rem);
-  font-size: clamp(1.5rem, 11.2cqi, 7.75rem);
-  line-height: 1.2;
-  text-wrap: balance;
-}
+.hero h1 { width: min(94%, 52rem); }
+.hero h1 img { display: block; width: 100%; height: auto; }
 .hero .primary{padding:.8rem 1.12rem;min-height:46px}
 .collection{margin-bottom:4.5rem}
 .collection-head,.tools,.views{display:flex;align-items:center}
@@ -109,11 +99,16 @@ textarea{resize:vertical;min-height:4rem}
 #detail-price{margin-top:.5rem;color:#555}
 #detail-notes{white-space:pre-line;line-height:1.45;margin:.8rem 0}
 .detail-actions:has(>:not([hidden])){margin-top:1.4rem}
+#purchase { border-top: 1px solid var(--line); margin-top: 1.25rem; padding-top: 1rem; }
+#purchase summary { cursor: pointer; font-weight: var(--strong); }
+#purchase summary:focus-visible { outline: 3px solid #1768b7; outline-offset: 3px; }
+#purchase-status { margin-top: .65rem; }
+#purchase-action { margin-top: .6rem; }
 #share-dialog p,#delete-dialog p{color:#555;line-height:1.5;margin-bottom:1.2rem}
 .toast{position:fixed;z-index:5;bottom:22px;left:50%;transform:translateX(-50%);background:#161616;color:white;border-radius:8px;font-size:var(--body);font-weight:var(--strong);box-shadow:0 3px 16px #0002}
 .toast:not(:empty){padding:.7rem 1rem}
 @media(max-width:760px){.ideas:not(:empty){grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:550px){.wrap{padding:0 17px}.hero{margin-top:17px;border-radius:12px}.collection-head{align-items:flex-start;gap:.75rem;flex-wrap:wrap;padding-bottom:1rem}.tools{gap:6px}.views button{width:27px}.empty{min-height:160px}.ideas:not(:empty){gap:10px}.idea-info{padding:.75rem}.list .idea-info{padding:.5rem .65rem}.pair{grid-template-columns:1.3fr 1fr}}
+@media(max-width:550px){.wrap{padding:0 17px}.hero{margin-top:17px}.collection-head{align-items:flex-start;gap:.75rem;flex-wrap:wrap;padding-bottom:1rem}.tools{gap:6px}.views button{width:27px}.empty{min-height:160px}.ideas:not(:empty){gap:10px}.idea-info{padding:.75rem}.list .idea-info{padding:.5rem .65rem}.pair{grid-template-columns:1.3fr 1fr}}
 @media(max-width:365px){.pair{grid-template-columns:1fr;gap:0}.ideas:not(:empty){grid-template-columns:1fr}}
 .storage-note{color:#606064;font-size:var(--body);line-height:1.45;padding:0 0 1rem}
 .storage-note .text-btn{margin-left:.5rem;color:#ae1023}

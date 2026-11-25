@@ -203,6 +203,8 @@ async function refresh() {
 
 function showDetail(idea) {
   selected = idea;
+  purchase.open = false;
+  purchase.hidden = !shared;
   byId('detail-person').textContent = idea.person;
   byId('detail-title').textContent = idea.title;
   byId('detail-price').textContent = idea.price === null ? '' : money(idea.price);
@@ -214,6 +216,51 @@ function showDetail(idea) {
   byId('edit').hidden = !preference.get(editStorage(idea.id));
   byId('detail').showModal();
 }
+
+const purchase = byId('purchase');
+const purchaseAction = byId('purchase-action');
+const purchaseStatus = byId('purchase-status');
+let purchaseRequest = 0;
+
+async function updatePurchase(method = 'GET') {
+  if (!purchase.open || !byId('detail').open) return;
+  const id = selected.id;
+  const version = ++purchaseRequest;
+  const storageKey = 'buyer.' + room + '.' + id;
+  let key = preference.get(storageKey);
+  if (method === 'PUT' && !key) {
+    key = randomKey();
+    preference.set(storageKey, key);
+  }
+  purchaseAction.disabled = true;
+  const url = api.replace(/\/ideas$/, '/purchases/') + id;
+  try {
+    const result = await request(url, {method, headers: key ? {'X-Edit-Key':key} : {}});
+    if (version !== purchaseRequest) return;
+    purchaseStatus.textContent = result.yours ? 'You marked this gift as bought.' :
+      result.bought ? 'Someone has marked this gift as bought.' : 'No one has marked this gift as bought.';
+    purchaseAction.hidden = result.bought && !result.yours;
+    purchaseAction.textContent = result.yours ? 'Undo purchase mark' : 'Mark as bought';
+    purchaseAction.dataset.method = result.yours ? 'DELETE' : 'PUT';
+  } catch (error) {
+    if (version !== purchaseRequest) return;
+    purchaseStatus.textContent = error.message === 'Failed to fetch' ? 'Couldn’t reach the list. Try checking again.' : error.message;
+    purchaseAction.hidden = false;
+    purchaseAction.textContent = 'Check again';
+    purchaseAction.dataset.method = 'GET';
+  } finally {
+    if (version === purchaseRequest) purchaseAction.disabled = false;
+  }
+}
+
+purchase.addEventListener('toggle', () => {
+  purchaseRequest++;
+  purchaseAction.hidden = true;
+  purchaseStatus.textContent = purchase.open ? 'Checking…' : '';
+  if (purchase.open) updatePurchase();
+});
+purchaseAction.addEventListener('click', () => updatePurchase(purchaseAction.dataset.method));
+byId('detail').addEventListener('close', () => { purchase.open = false; });
 
 function setPhoto(value) {
   draft.photo = value;
@@ -371,8 +418,13 @@ byId('copy-link').addEventListener('click', async () => {
   }
 });
 byId('retry').addEventListener('click', refresh);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
-setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) refresh(); }, 60000);
+function refreshVisibleView() {
+  if (document.hidden) return;
+  if (!document.querySelector('dialog[open]')) refresh();
+  else if (purchase.open && !purchaseAction.disabled) updatePurchase();
+}
+document.addEventListener('visibilitychange', refreshVisibleView);
+setInterval(refreshVisibleView, 60000);
 async function updateStorageNote() {
   const note = byId('storage-note');
   const sync = byId('sync-device');
