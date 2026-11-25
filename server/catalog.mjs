@@ -40,8 +40,9 @@ function validate(data) {
     throw new InputError('Enter a valid price.');
   }
   const photo = field(data, 'photo', maxPhotoChars);
-  if (photo && !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+=*$/.test(photo)) {
-    throw new InputError('Please choose a JPEG-compatible photo.');
+  const linkedPhoto = photo.startsWith('https://') && photo.length <= 4096 && url && storefrontURL(photo);
+  if (photo && !linkedPhoto && !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+=*$/.test(photo)) {
+    throw new InputError('Choose a photo from the product link or upload a photo.');
   }
   return {person, title, notes, url, price, photo};
 }
@@ -107,93 +108,152 @@ async function headMarkup(response) {
   } finally { reader.cancel().catch(() => {}); }
 }
 
-async function extractImage(markup, pageURL) {
-  const candidates = new Map();
+const maxPreviewImages = 6;
+
+async function extractImages(markup, pageURL) {
+  const ranked = Array.from({length:4}, () => new Set());
   let base = pageURL;
-  const remember = (rank, value) => {
-    if (value && !candidates.has(rank)) candidates.set(rank, value);
-  };
+  function remember(rank, value) {
+    if (typeof value === 'string' && value.trim() && value.length <= 4096 && ranked[rank].size < 40) {
+      ranked[rank].add(value.trim().replace(/&amp;/gi, '&'));
+    }
+  }
+  function productData(node) {
+    if (Array.isArray(node)) { node.forEach(productData); return; }
+    if (!node || typeof node !== 'object') return;
+    const types = [].concat(node['@type'] || []);
+    if (types.some(type => /(?:^|\/)(Product|ProductGroup)$/.test(type))) {
+      for (const image of [].concat(node.image || [])) {
+        remember(0, typeof image === 'string' ? image : image?.contentUrl || image?.url || image?.['@id']);
+      }
+    }
+    if (node['@graph']) productData(node['@graph']);
+    if (node.mainEntity) productData(node.mainEntity);
+  }
+  let script = null;
   const rewriter = new HTMLRewriter()
     .on('base[href]', {element(el) { base = storefrontURL(el.getAttribute('href'), pageURL) || pageURL; }})
+    .on('script[type="application/ld+json"]', {
+      element(el) {
+        script = '';
+        el.onEndTag(() => {
+          if (script) { try { productData(JSON.parse(script)); } catch {} }
+          script = null;
+        });
+      },
+      text(chunk) {
+        if (script !== null) script = script.length + chunk.text.length <= 192 * 1024 ? script + chunk.text : null;
+      }
+    })
     .on('meta', {element(el) {
       const name = (el.getAttribute('property') || el.getAttribute('name') || el.getAttribute('itemprop') || '').trim().toLowerCase();
-      const index = ['og:image:secure_url','og:image','og:image:url','twitter:image','twitter:image:src','image'].indexOf(name);
-      if (index >= 0) remember(index, el.getAttribute('content'));
+      if (['og:image','og:image:secure_url','og:image:url','twitter:image','twitter:image:src','image'].includes(name)) {
+        remember(1, el.getAttribute('content'));
+      }
     }})
-    .on('link[rel~="image_src"]', {element(el) { remember(6, el.getAttribute('href')); }});
-  for (const [rank, selector] of ['img[itemprop~="image"]','#landingImage','main img','article img'].entries()) {
-    rewriter.on(selector, {element(el) {
-      remember(7 + rank, el.getAttribute('data-old-hires') || el.getAttribute('data-src') || el.getAttribute('src'));
-    }});
+    .on('link[rel~="image_src"]', {element(el) { remember(1, el.getAttribute('href')); }});
+  function imageElement(rank) {
+    return {element(el) {
+      const sourceSet = el.getAttribute('data-srcset') || el.getAttribute('srcset') || '';
+      const sizes = Array.from(sourceSet.matchAll(/(?:^|,\s*)\s*(\S+)\s+(\d+(?:\.\d+)?)([wx])(?=\s*(?:,|$))/g),
+        ([, src, size, unit]) => ({src, width:Number(size) * (unit === 'x' ? 480 : 1)}));
+      sizes.sort((a,b) => a.width - b.width);
+      const source = (sizes.find(size => size.width >= 640) || sizes.at(-1))?.src;
+      remember(rank, el.getAttribute('data-zoom-image') || el.getAttribute('data-old-hires') ||
+        el.getAttribute('data-src') || source || el.getAttribute('src'));
+    }};
   }
+  for (const selector of ['img[itemprop~="image"]', '#landingImage', 'img[data-zoom-image]', '[data-product-media] img',
+                          '[class*="product-gallery"] img', '[class*="product__media"] img', '[class*="product-image"] img']) {
+    rewriter.on(selector, imageElement(2));
+  }
+  rewriter.on('main img', imageElement(3)).on('article img', imageElement(3));
   await rewriter.transform(new Response(markup, {headers:{'Content-Type':'text/html;charset=utf-8'}})).text();
-  for (const [,value] of [...candidates].sort(([a],[b]) => a-b)) {
-    const url = storefrontURL(value.trim().replace(/&amp;/gi,'&'), base);
-    if (url) return url.href;
+  const images = [];
+  const seen = new Set();
+  for (const group of ranked) {
+    if (group === ranked[3] && images.length > 1) break;
+    for (const value of group) {
+      const url = storefrontURL(value, base);
+      if (!url || url.href.length > 4096 || /\.svg$/i.test(url.pathname) ||
+          /(?:^|[/_.-])(?:placeholder|spacer|favicon|sprite|logo)(?:[/_.-]|$)/i.test(url.pathname)) continue;
+      const identity = new URL(url);
+      for (const size of ['width','height','w','h','dpr','quality']) identity.searchParams.delete(size);
+      if (/^\?\d{8,}$/.test(identity.search)) identity.search = '';
+      if (seen.has(identity.href)) continue;
+      seen.add(identity.href);
+      images.push(url.href);
+      if (images.length === maxPreviewImages) return images;
+    }
   }
-  return '';
+  return images;
 }
 
-// UGG publishes its product photos under stable style-and-colour asset names.
-function uggProductImage(url) {
-  if (url.hostname !== 'www.ugg.com' && url.hostname !== 'ugg.com') return null;
+// UGG's numbered product views share the style and colour in the product link.
+function uggProductImages(url) {
+  if (url.hostname !== 'www.ugg.com' && url.hostname !== 'ugg.com') return [];
   const style = url.pathname.match(/\/([a-z0-9]{3,20})\.html$/i)?.[1];
-  if (!style) return null;
+  if (!style) return [];
   const color = url.searchParams.get('dwvar_' + style + '_color') || '';
-  if (!/^[a-z0-9]{2,12}$/i.test(color)) return null;
-  return 'https://dms.deckers.com/ugg/image/upload/w_640,q_auto,f_auto/' + style.toUpperCase() + '-' + color.toUpperCase() + '_1.png';
+  if (!/^[a-z0-9]{2,12}$/i.test(color)) return [];
+  const prefix = 'https://dms.deckers.com/ugg/image/upload/w_640,q_auto,f_auto/' + style.toUpperCase() + '-' + color.toUpperCase() + '_';
+  return Array.from({length:maxPreviewImages}, (_, index) => prefix + (index + 1) + '.png');
 }
 
-async function discoverImage(start) {
+async function discoverImages(start) {
   let pageURL = start;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5500);
+  const timer = setTimeout(() => controller.abort(), 7000);
   try {
-    const productImage = uggProductImage(start);
-    if (productImage) {
-      const asset = await fetch(productImage, {method:'HEAD', redirect:'manual', signal:controller.signal}).catch(() => null);
-      if (asset?.ok && asset.headers.get('content-type')?.startsWith('image/')) return productImage;
+    const candidates = uggProductImages(start);
+    if (candidates.length) {
+      const verified = await Promise.all(candidates.map(async image => {
+        const asset = await fetch(image, {method:'HEAD', redirect:'manual', signal:controller.signal}).catch(() => null);
+        return asset?.ok && asset.headers.get('content-type')?.startsWith('image/') ? image : null;
+      }));
+      if (verified.some(Boolean)) return verified.filter(Boolean);
     }
     for (let redirects = 0; redirects <= 3; redirects++) {
       const response = await fetch(pageURL.href, {redirect:'manual', signal:controller.signal, headers:{'Accept':'text/html,image/avif,image/webp,image/jpeg,image/png,*/*;q=0.5'}});
       if (response.status >= 300 && response.status < 400) {
         response.body?.cancel().catch(() => {});
         const location = response.headers.get('location');
-        if (!location) return '';
+        if (!location) return [];
         pageURL = storefrontURL(location, pageURL);
-        if (!pageURL) return '';
+        if (!pageURL) return [];
         continue;
       }
       const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (!response.ok || !response.body || !['text/html','application/xhtml+xml'].includes(type)) {
         response.body?.cancel().catch(() => {});
-        return response.ok && /^image\/(?:jpeg|png|webp|avif|gif)$/.test(type) ? pageURL.href : '';
+        return response.ok && /^image\/(?:jpeg|png|webp|avif|gif)$/.test(type) ? [pageURL.href] : [];
       }
-      return await extractImage(await headMarkup(response), pageURL);
+      return await extractImages(await headMarkup(response), pageURL);
     }
-  } catch { return ''; }
+  } catch { return []; }
   finally { clearTimeout(timer); }
-  return '';
+  return [];
 }
 
 async function linkPreview(request, endpoint) {
   const data = await readBody(request, 12000);
   const url = storefrontURL(field(data || {}, 'url', 2048, true));
-  if (!url) return json({image:''});
+  if (!url) return json({image:'', images:[]});
   // Keep submitted URLs, including their query parameters, out of cache keys and access logs.
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(url.href));
   const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
-  const key = new Request(endpoint.origin + endpoint.pathname + '/v2/' + hex);
+  const key = new Request(endpoint.origin + endpoint.pathname + '/gallery-v1/' + hex);
   const cache = globalThis.caches?.default;
   const cached = await cache?.match(key).catch(() => null);
   if (cached) return json(await cached.json());
-  const image = await discoverImage(url);
+  const images = await discoverImages(url);
+  const result = {image: images[0] || '', images};
   if (cache) {
-    const ttl = image ? 86400 : 300;
-    const result = new Response(JSON.stringify({image}), {headers:{'Cache-Control':'public, max-age=' + ttl,'Content-Type':'application/json'}});
-    await cache.put(key,result).catch(() => {});
+    const ttl = images.length ? 86400 : 300;
+    const response = new Response(JSON.stringify(result), {headers:{'Cache-Control':'public, max-age=' + ttl,'Content-Type':'application/json'}});
+    await cache.put(key,response).catch(() => {});
   }
-  return json({image});
+  return json(result);
 }
 
 const normalizePerson = name => name.normalize('NFC').trim().toLowerCase();

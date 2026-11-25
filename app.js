@@ -54,18 +54,19 @@ function make(tag, cls, text) {
 
 // Reuse the same lookup when a link appears in a form, a card, or its detail view.
 const linkImages = new Map();
-function linkImage(value) {
-  if (!value || !shared) return Promise.resolve('');
+function imagesFromLink(value) {
+  if (!value || !shared) return Promise.resolve([]);
   if (!linkImages.has(value)) {
     const pending = fetch(api.replace(/\/ideas$/, '/preview'), {
       method:'POST', credentials:'omit', referrerPolicy:'no-referrer',
       headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:value})
     }).then(async response => {
       if (!response.ok) throw new Error('Preview unavailable');
-      return (await response.json()).image || '';
-    }).catch(() => '');
+      const data = await response.json();
+      return data.images || (data.image ? [data.image] : []);
+    }).catch(() => []);
     linkImages.set(value, pending);
-    pending.then(image => { if (!image) setTimeout(() => linkImages.delete(value), 60000); });
+    pending.then(images => { if (!images.length) setTimeout(() => linkImages.delete(value), 60000); });
   }
   return linkImages.get(value);
 }
@@ -75,15 +76,16 @@ function displayImage(img, photo, link) {
   img.dataset.revision = revision;
   img.hidden = true;
   img.removeAttribute('src');
-  const show = src => {
+  const show = (images, index = 0) => {
+    const src = images[index];
     if (!src || img.dataset.revision !== revision) return;
     img.referrerPolicy = 'no-referrer';
     img.onload = () => { if (img.dataset.revision === revision) img.hidden = false; };
-    img.onerror = () => { if (img.dataset.revision === revision) img.hidden = true; };
+    img.onerror = () => { if (img.dataset.revision === revision) { img.hidden = true; show(images, index + 1); } };
     img.src = src;
   };
-  if (photo) show(photo);
-  else if (link) linkImage(link).then(show);
+  if (photo) show([photo]);
+  else if (link) imagesFromLink(link).then(show);
 }
 
 function makeCard(idea) {
@@ -262,11 +264,77 @@ purchase.addEventListener('toggle', () => {
 purchaseAction.addEventListener('click', () => updatePurchase(purchaseAction.dataset.method));
 byId('detail').addEventListener('close', () => { purchase.open = false; });
 
-function setPhoto(value) {
+const photoOptions = byId('photo-options');
+const photoStatus = byId('photo-options-status');
+let previewTimer, previewVersion = 0;
+
+function setPhoto(value, automatic = false) {
   draft.photo = value;
-  displayImage(byId('photo-preview'), value, form.elements.url.value.trim());
-  byId('photo-label').textContent = value ? 'Change photo' : 'Add photo';
-  byId('remove-photo').hidden = !value;
+  draft.autoPhoto = automatic;
+  const uploaded = value.startsWith('data:');
+  displayImage(byId('photo-preview'), uploaded ? value : '', '');
+  byId('photo-label').textContent = uploaded ? 'Change photo' : 'Upload photo';
+  byId('remove-photo').hidden = !uploaded;
+  for (const button of photoOptions.children) {
+    button.setAttribute('aria-pressed', String(button.dataset.src === value));
+  }
+}
+
+function loadPhotoOptions(delay = 0) {
+  clearTimeout(previewTimer);
+  const version = ++previewVersion;
+  const input = form.elements.url;
+  const url = input.value.trim();
+  const valid = shared && input.validity.valid && /^https?:/i.test(url);
+  byId('linked-photos').hidden = !valid;
+  photoOptions.replaceChildren();
+  photoStatus.textContent = valid ? 'Finding photos…' : '';
+  if (!valid) return;
+  previewTimer = setTimeout(async () => {
+    const images = await imagesFromLink(url);
+    if (!editor.open || version !== previewVersion) return;
+    const candidates = [...images];
+    if (draft.photo.startsWith('https://') && !candidates.includes(draft.photo)) candidates.unshift(draft.photo);
+    const emptyMessage = 'No photos available from this link. You can upload one.';
+    if (!candidates.length) { photoStatus.textContent = emptyMessage; return; }
+    let remaining = candidates.length;
+    const current = () => editor.open && version === previewVersion;
+    const showEmpty = () => {
+      if (current() && !photoOptions.querySelector('button:not([hidden])')) photoStatus.textContent = emptyMessage;
+    };
+    previewTimer = setTimeout(showEmpty, 10000);
+    candidates.forEach((src, index) => {
+      const button = make('button', 'photo-option');
+      button.type = 'button';
+      button.hidden = true;
+      button.dataset.src = src;
+      button.setAttribute('aria-label', 'Choose product photo ' + (index + 1));
+      button.setAttribute('aria-pressed', String(src === draft.photo));
+      const image = make('img');
+      image.alt = '';
+      image.referrerPolicy = 'no-referrer';
+      image.onload = () => {
+        if (!current()) return;
+        remaining--;
+        if (image.naturalWidth < 20 || image.naturalHeight < 20) { if (!remaining) showEmpty(); return; }
+        button.hidden = false;
+        photoStatus.textContent = 'Choose a product photo';
+        if (!draft.photo || draft.autoPhoto) setPhoto(photoOptions.querySelector('button:not([hidden])').dataset.src, true);
+      };
+      image.onerror = () => { if (!--remaining) showEmpty(); };
+      button.addEventListener('click', () => {
+        if (saving) return;
+        ++photoWork;
+        photoPending = false;
+        byId('save').disabled = false;
+        byId('photo-file').value = '';
+        setPhoto(src);
+      });
+      button.append(image);
+      photoOptions.append(button);
+      image.src = src;
+    });
+  }, delay);
 }
 
 function formError(message = '') {
@@ -294,6 +362,7 @@ function openEditor(idea = null) {
   setPhoto(idea?.photo || '');
   formError();
   editor.showModal();
+  loadPhotoOptions();
   (form.elements.person.value ? form.elements.title : form.elements.person).focus();
 }
 
@@ -344,7 +413,8 @@ byId('photo-file').addEventListener('change', async event => {
 });
 byId('remove-photo').addEventListener('click', () => {
   ++photoWork; photoPending = false; byId('save').disabled = false;
-  setPhoto(''); byId('photo-file').value = '';
+  setPhoto(photoOptions.querySelector('button:not([hidden])')?.dataset.src || '', true);
+  byId('photo-file').value = '';
 });
 function setBusy(value) {
   saving = value;
@@ -389,18 +459,11 @@ byId('all-people').addEventListener('click', () => history.back());
 window.addEventListener('popstate', event => {
   if (roomFromURL() === room) openPerson(event.state?.wishPerson || '');
 });
-let previewTimer;
 form.elements.url.addEventListener('input', () => {
-  clearTimeout(previewTimer);
-  if (draft.photo) return;
-  displayImage(byId('photo-preview'), '', '');
-  previewTimer = setTimeout(() => {
-    if (editor.open && !draft.photo && form.elements.url.validity.valid) {
-      displayImage(byId('photo-preview'), '', form.elements.url.value.trim());
-    }
-  }, 450);
+  if (draft.photo.startsWith('https://')) setPhoto('');
+  loadPhotoOptions(400);
 });
-editor.addEventListener('close', () => clearTimeout(previewTimer));
+editor.addEventListener('close', () => { clearTimeout(previewTimer); previewVersion++; });
 for (const view of ['grid','list']) byId('view-' + view).addEventListener('click', () => { state.view = view; preference.set('view',view); render(); });
 byId('share-btn').addEventListener('click', () => {
   byId('share-url').value = shareLink();
