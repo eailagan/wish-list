@@ -179,7 +179,7 @@ async function extractImages(markup, pageURL) {
           /(?:^|[/_.-])(?:placeholder|spacer|favicon|sprite|logo)(?:[/_.-]|$)/i.test(url.pathname)) continue;
       const identity = new URL(url);
       for (const size of ['width','height','w','h','dpr','quality']) identity.searchParams.delete(size);
-      if (/^\?\d{8,}$/.test(identity.search)) identity.search = '';
+      if (/^\?\d{8,}=?$/.test(identity.search)) identity.search = '';
       if (seen.has(identity.href)) continue;
       seen.add(identity.href);
       images.push(url.href);
@@ -242,7 +242,7 @@ async function linkPreview(request, endpoint) {
   // Keep submitted URLs, including their query parameters, out of cache keys and access logs.
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(url.href));
   const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
-  const key = new Request(endpoint.origin + endpoint.pathname + '/gallery-v1/' + hex);
+  const key = new Request(endpoint.origin + endpoint.pathname + '/gallery-v2/' + hex);
   const cache = globalThis.caches?.default;
   const cached = await cache?.match(key).catch(() => null);
   if (cached) return json(await cached.json());
