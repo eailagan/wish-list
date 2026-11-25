@@ -69,8 +69,8 @@ async function readBody(request, limit = maxPhotoChars + 11000) {
   catch { throw new InputError('Invalid gift idea.'); }
 }
 
-async function editHash(request) {
-  const key = request.headers.get('x-edit-key') || '';
+async function editHash(request, header = 'X-Edit-Key') {
+  const key = request.headers.get(header) || '';
   if (!roomPattern.test(key)) throw new InputError('This browser does not have the edit key.', 403);
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(key));
   return Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
@@ -258,6 +258,13 @@ async function linkPreview(request, endpoint) {
 
 const normalizePerson = name => name.normalize('NFC').trim().toLowerCase();
 
+function visibleIdea(record, buyer = null) {
+  const {buyerHash, ...idea} = record;
+  if (!buyerHash) return idea;
+  if (buyer === buyerHash) return {...idea, boughtByYou:true};
+  return {id:idea.id, created:idea.created, hiddenPurchase:true, title:'Purchased gift', price:null};
+}
+
 async function catalogPage(bucket, prefix, url) {
   const namesOnly = url.searchParams.get('view') === 'people';
   const person = normalizePerson(url.searchParams.get('person') || '');
@@ -271,9 +278,9 @@ async function catalogPage(bucket, prefix, url) {
     }
     const stored = await bucket.get(object.key);
     if (!stored) return null;
-    const {buyerHash, ...idea} = await stored.json();
+    const idea = await stored.json();
     if (namesOnly) return idea.person;
-    return !person || normalizePerson(idea.person) === person ? idea : null;
+    return !person || normalizePerson(idea.person) === person ? visibleIdea(idea) : null;
   }));
   const items = entries.filter(Boolean);
   const payload = namesOnly ? {people:[...new Set(items)]} : {ideas:items};
@@ -319,11 +326,19 @@ async function handle(request, env, url) {
   if (!id && request.method === 'GET') {
     return catalogPage(bucket, prefix, url);
   }
-  if (!id || !['PUT', 'DELETE'].includes(request.method)) throw new InputError('Unsupported operation.', 405);
-  const hash = await editHash(request);
+  if (!id || !['GET','PUT','DELETE'].includes(request.method)) throw new InputError('Unsupported operation.', 405);
   const key = prefix + id;
   const current = await bucket.get(key);
+  const record = current && await current.json();
+  const buyer = request.headers.has('X-Buyer-Key') ? await editHash(request, 'X-Buyer-Key') : null;
+  if (request.method === 'GET') {
+    if (!record) throw new InputError('This gift is no longer on the list.', 404);
+    return json(visibleIdea(record, buyer));
+  }
+  const hash = await editHash(request);
   if (current && current.customMetadata?.editHash !== hash) throw new InputError('Only the browser that added this idea can edit it.', 403);
+  const buyerHash = record?.buyerHash;
+  if (buyerHash && buyer !== buyerHash) throw new InputError('This gift has been purchased.', 409);
   if (request.method === 'DELETE') {
     if (current) await bucket.delete(key);
     return new Response(null, {status: 204});
@@ -331,9 +346,8 @@ async function handle(request, env, url) {
   const data = validate(await readBody(request));
   const created = current?.customMetadata?.created || new Date().toISOString();
   const idea = {id, created, ...data};
-  const buyerHash = current && (await current.json()).buyerHash;
-  const record = buyerHash ? {...idea, buyerHash} : idea;
-  const written = await bucket.put(key, JSON.stringify(record), {
+  const next = buyerHash ? {...idea, buyerHash} : idea;
+  const written = await bucket.put(key, JSON.stringify(next), {
     onlyIf: current ? {etagMatches: current.etag} : {etagDoesNotMatch: '*'},
     customMetadata: {editHash: hash, created, person: encodeURIComponent(data.person)},
     httpMetadata: {contentType: 'application/json'}
@@ -350,7 +364,7 @@ export async function serveCatalog(request, env) {
   if (!allowed) return new Response('Origin unavailable', {status: 403, headers});
   if (origin) headers.set('Access-Control-Allow-Origin', origin);
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Edit-Key');
+  headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Edit-Key, X-Buyer-Key');
   let result;
   try {
     result = request.method === 'OPTIONS' ? new Response(null, {status: 204}) : await handle(request, env, url);

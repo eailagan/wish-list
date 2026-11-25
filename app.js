@@ -22,9 +22,15 @@ window.addEventListener('hashchange', () => location.reload());
 const shared = Boolean(window.GIFTBOOK_API_ORIGIN);
 const api = (window.GIFTBOOK_API_ORIGIN || location.origin) + '/api/' + room + '/ideas';
 const state = {people: [], person: '', ideas: [], view: preference.get('view') === 'list' ? 'list' : 'grid', loading: true, error: false};
-let requestNumber = 0;
+let requestNumber = 0, cardRequest = 0;
 let draft, selected, photoWork = 0, photoPending = false, saving = false, toastTimer;
 const editStorage = id => 'edit.' + room + '.' + id;
+const buyerStorage = id => 'buyer.' + room + '.' + id;
+function buyerHeaders(id) {
+  const key = preference.get(buyerStorage(id));
+  return key ? {'X-Buyer-Key':key} : {};
+}
+const readIdea = id => request(api + '/' + id, {headers:buyerHeaders(id)});
 const money = cents => '$' + (cents / 100).toLocaleString(undefined, {minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2});
 const personKey = name => name.normalize('NFC').trim().toLowerCase();
 const shareLink = () => location.origin + location.pathname + invitationHash;
@@ -93,6 +99,12 @@ function makeCard(idea) {
   button.dataset.id = idea.id;
   const visual = make('span', 'idea-visual');
   visual.append(icon('gift'));
+  if (idea.hiddenPurchase) {
+    button.disabled = true;
+    button.classList.add('purchased-placeholder');
+    button.append(visual, make('span', 'idea-info', 'Purchased gift'));
+    return button;
+  }
   if (idea.photo || idea.url) {
     const photo = make('img');
     photo.alt = '';
@@ -102,12 +114,37 @@ function makeCard(idea) {
   const info = make('span', 'idea-info');
   info.append(make('span', 'idea-title', idea.title));
   if (idea.price !== null) info.append(make('span', 'idea-price', money(idea.price)));
+  if (idea.boughtByYou) info.append(make('span', 'buyer-note', 'You bought this'));
   button.append(visual, info);
-  button.addEventListener('click', () => showDetail(idea));
+  button.addEventListener('click', () => openCard(idea));
+  if (preference.get(editStorage(idea.id))) {
+    enablePhotoDrop(button, file => openCard(idea, {edit:true, file}));
+  }
   return button;
 }
 
+async function openCard(idea, {edit = false, file} = {}) {
+  const version = ++cardRequest;
+  try {
+    const current = shared ? await readIdea(idea.id) : idea;
+    if (version !== cardRequest || document.querySelector('dialog[open]')) return;
+    if (current.hiddenPurchase) {
+      state.ideas = state.ideas.map(item => item.id === current.id ? current : item);
+      render();
+      toast('This gift has been purchased.');
+    } else if (edit) {
+      openEditor(current);
+      if (file) applyPhoto(file);
+    } else {
+      showDetail(current);
+    }
+  } catch {
+    if (version === cardRequest) { toast('Couldn’t open this gift. Please try again.'); refresh(); }
+  }
+}
+
 function openPerson(name, moveFocus = true) {
+  cardRequest++;
   state.person = name;
   state.ideas = [];
   state.loading = true;
@@ -181,11 +218,26 @@ async function refresh() {
       if (number !== requestNumber) return;
       const entries = person ? page.ideas : page.people;
       if (!Array.isArray(entries)) throw new Error('The shared list is unavailable.');
-      results.push(...entries);
+      if (person && shared) {
+        const visible = await Promise.all(entries.map(idea => {
+          if (idea.hiddenPurchase && preference.get(buyerStorage(idea.id))) return readIdea(idea.id).catch(() => idea);
+          return idea;
+        }));
+        if (number !== requestNumber) return;
+        results.push(...visible);
+      } else results.push(...entries);
       cursor = page.cursor;
     } while (cursor);
     if (person) {
       state.ideas = results.sort((a,b) => b.created.localeCompare(a.created) || a.id.localeCompare(b.id));
+      const detail = byId('detail');
+      const openId = detail.open ? selected?.id : editor.open && draft?.editing ? draft.id : null;
+      if (openId && results.some(idea => idea.id === openId && idea.hiddenPurchase)) {
+        if (byId('delete-dialog').open) byId('delete-dialog').close();
+        if (detail.open) detail.close();
+        if (editor.open) editor.close();
+        toast('This gift has been purchased.');
+      }
     } else {
       const names = new Map();
       for (const name of results.sort((a,b) => a.localeCompare(b))) names.set(personKey(name), name);
@@ -205,7 +257,7 @@ async function refresh() {
 
 function showDetail(idea) {
   selected = idea;
-  purchase.open = false;
+  purchase.open = Boolean(idea.boughtByYou);
   purchase.hidden = !shared;
   byId('detail-person').textContent = idea.person;
   byId('detail-title').textContent = idea.title;
@@ -228,7 +280,7 @@ async function updatePurchase(method = 'GET') {
   if (!purchase.open || !byId('detail').open) return;
   const id = selected.id;
   const version = ++purchaseRequest;
-  const storageKey = 'buyer.' + room + '.' + id;
+  const storageKey = buyerStorage(id);
   let key = preference.get(storageKey);
   if (method === 'PUT' && !key) {
     key = randomKey();
@@ -238,10 +290,15 @@ async function updatePurchase(method = 'GET') {
   const url = api.replace(/\/ideas$/, '/purchases/') + id;
   try {
     const result = await request(url, {method, headers: key ? {'X-Edit-Key':key} : {}});
+    if (method !== 'GET' || (result.bought && !result.yours)) refresh();
     if (version !== purchaseRequest) return;
-    purchaseStatus.textContent = result.yours ? 'You marked this gift as bought.' :
-      result.bought ? 'Someone has marked this gift as bought.' : 'No one has marked this gift as bought.';
-    purchaseAction.hidden = result.bought && !result.yours;
+    if (result.bought && !result.yours) {
+      byId('detail').close();
+      toast('This gift has been purchased.');
+      return;
+    }
+    purchaseStatus.textContent = result.yours ? 'You marked this gift as bought.' : 'No one has marked this gift as bought.';
+    purchaseAction.hidden = false;
     purchaseAction.textContent = result.yours ? 'Undo purchase mark' : 'Mark as bought';
     purchaseAction.dataset.method = result.yours ? 'DELETE' : 'PUT';
   } catch (error) {
@@ -262,7 +319,15 @@ purchase.addEventListener('toggle', () => {
   if (purchase.open) updatePurchase();
 });
 purchaseAction.addEventListener('click', () => updatePurchase(purchaseAction.dataset.method));
-byId('detail').addEventListener('close', () => { purchase.open = false; });
+byId('detail').addEventListener('close', () => {
+  purchaseRequest++;
+  purchase.open = false;
+  selected = null;
+  byId('detail').classList.remove('photo-drag-over');
+  for (const id of ['detail-person','detail-title','detail-notes','detail-price']) byId(id).textContent = '';
+  byId('detail-link').removeAttribute('href');
+  displayImage(byId('detail-image'), '', '');
+});
 
 const photoOptions = byId('photo-options');
 const photoStatus = byId('photo-options-status');
@@ -392,9 +457,8 @@ async function convertPhoto(file) {
   } finally { URL.revokeObjectURL(uri); }
 }
 
-byId('photo-file').addEventListener('change', async event => {
-  const file = event.target.files[0];
-  if (!file) return;
+async function applyPhoto(file) {
+  if (!file || !editor.open || saving) return;
   const number = ++photoWork;
   photoPending = true;
   byId('save').disabled = true;
@@ -410,7 +474,47 @@ byId('photo-file').addEventListener('change', async event => {
       byId('save').disabled = false;
     }
   }
-});
+}
+byId('photo-file').addEventListener('change', event => applyPhoto(event.target.files[0]));
+
+function enablePhotoDrop(target, accept, allowed = () => true) {
+  target.addEventListener('dragover', event => {
+    if (!event.dataTransfer.types.includes('Files') || !allowed()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    target.classList.add('photo-drag-over');
+  });
+  target.addEventListener('dragleave', event => {
+    if (!target.contains(event.relatedTarget)) target.classList.remove('photo-drag-over');
+  });
+  target.addEventListener('drop', event => {
+    target.classList.remove('photo-drag-over');
+    const files = event.dataTransfer.files;
+    if (!files.length || !allowed()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (files.length !== 1 || (files[0].type && !files[0].type.startsWith('image/'))) {
+      const message = 'Choose one image file.';
+      if (editor.open) formError(message); else toast(message);
+      return;
+    }
+    accept(files[0]);
+  });
+}
+enablePhotoDrop(editor, applyPhoto, () => !saving);
+enablePhotoDrop(byId('detail'), file => {
+  const idea = selected;
+  byId('detail').close();
+  openCard(idea, {edit:true, file});
+}, () => Boolean(selected && preference.get(editStorage(selected.id))));
+for (const type of ['dragover','drop']) {
+  document.addEventListener(type, event => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'none';
+  });
+}
 byId('remove-photo').addEventListener('click', () => {
   ++photoWork; photoPending = false; byId('save').disabled = false;
   setPhoto(photoOptions.querySelector('button:not([hidden])')?.dataset.src || '', true);
@@ -430,7 +534,7 @@ form.addEventListener('submit', async event => {
   if (!data.person || !data.title) { formError('Enter a name and a gift idea.'); return; }
   formError(); setBusy(true);
   try {
-    await request(api + '/' + draft.id, {method:'PUT',headers:{'Content-Type':'application/json','X-Edit-Key':draft.key},body:JSON.stringify(data)});
+    await request(api + '/' + draft.id, {method:'PUT',headers:{'Content-Type':'application/json','X-Edit-Key':draft.key,...buyerHeaders(draft.id)},body:JSON.stringify(data)});
     preference.set(editStorage(draft.id), draft.key);
     preference.set('name.' + room, data.person);
     editor.close();
@@ -439,7 +543,11 @@ form.addEventListener('submit', async event => {
   } catch (e) { formError(e.message === 'Failed to fetch' ? 'Couldn’t save. Check your connection and try again.' : e.message); }
   finally { setBusy(false); }
 });
-byId('edit').addEventListener('click', () => { byId('detail').close(); openEditor(selected); });
+byId('edit').addEventListener('click', () => {
+  const idea = selected;
+  byId('detail').close();
+  openCard(idea, {edit:true});
+});
 byId('remove').addEventListener('click', () => {
   byId('delete-name').textContent = form.elements.title.value;
   byId('delete-dialog').showModal(); byId('delete-cancel').focus();
@@ -448,7 +556,7 @@ byId('delete-cancel').addEventListener('click', () => byId('delete-dialog').clos
 byId('delete-confirm').addEventListener('click', async () => {
   byId('delete-dialog').close(); setBusy(true); formError();
   try {
-    await request(api + '/' + draft.id, {method:'DELETE',headers:{'X-Edit-Key':draft.key}});
+    await request(api + '/' + draft.id, {method:'DELETE',headers:{'X-Edit-Key':draft.key,...buyerHeaders(draft.id)}});
     editor.close(); toast('Gift idea deleted'); await refresh();
   } catch { formError('Couldn’t delete the idea. Please try again.'); }
   finally { setBusy(false); }
@@ -463,7 +571,12 @@ form.elements.url.addEventListener('input', () => {
   if (draft.photo.startsWith('https://')) setPhoto('');
   loadPhotoOptions(400);
 });
-editor.addEventListener('close', () => { clearTimeout(previewTimer); previewVersion++; });
+editor.addEventListener('close', () => {
+  clearTimeout(previewTimer);
+  previewVersion++;
+  photoWork++;
+  editor.classList.remove('photo-drag-over');
+});
 for (const view of ['grid','list']) byId('view-' + view).addEventListener('click', () => { state.view = view; preference.set('view',view); render(); });
 byId('share-btn').addEventListener('click', () => {
   byId('share-url').value = shareLink();
@@ -482,12 +595,14 @@ byId('copy-link').addEventListener('click', async () => {
 });
 byId('retry').addEventListener('click', refresh);
 function refreshVisibleView() {
-  if (document.hidden) return;
-  if (!document.querySelector('dialog[open]')) refresh();
-  else if (purchase.open && !purchaseAction.disabled) updatePurchase();
+  if (document.hidden || saving) return;
+  refresh();
+  if (purchase.open && !purchaseAction.disabled) updatePurchase();
 }
 document.addEventListener('visibilitychange', refreshVisibleView);
-setInterval(refreshVisibleView, 60000);
+window.addEventListener('focus', refreshVisibleView);
+setInterval(() => { if (state.person) refreshVisibleView(); }, 15000);
+setInterval(() => { if (!state.person) refreshVisibleView(); }, 60000);
 async function updateStorageNote() {
   const note = byId('storage-note');
   const sync = byId('sync-device');
