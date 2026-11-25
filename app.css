@@ -60,11 +60,13 @@ h2{font-size:var(--body)}
 .card-purchase {
   position: relative;
   z-index: 1;
-  align-self: flex-end;
+  align-self: center;
+  color: #000;
   margin: auto var(--card-inset) var(--card-inset);
   max-width: calc(100% - var(--card-inset) - var(--card-inset));
   padding-inline: .8rem;
 }
+.card-purchase:hover { background: #fff; border-color: #999; }
 .idea{flex:1;position:relative;min-width:0;border:1px solid var(--line);background:white;border-radius:12px;overflow:hidden;text-align:left;padding:0;display:flex;flex-direction:column}
 .idea:hover{border-color:#aaa}
 .idea:has(.idea-title:focus-visible){outline:3px solid #1768b7;outline-offset:3px}
@@ -79,8 +81,8 @@ h2{font-size:var(--body)}
 .idea-price{color:#555;font-size:var(--body)}
 .ideas.list:not(:empty){display:flex;flex-direction:column;gap:0;border-top:1px solid var(--line)}
 .list .gift-entry{border-bottom:1px solid var(--line);padding:.5rem 0}
-.list .card-purchase{align-self:end;justify-self:end;margin:0;max-width:100%}
-.list .idea{border-width:0;border-radius:0;display:grid;grid-template-columns:54px minmax(0,1fr) auto;align-items:center;gap:.65rem;padding:.65rem .5rem}
+.list .card-purchase{grid-column:1 / -1;justify-self:center;margin:0;max-width:100%}
+.list .idea{border-width:0;border-radius:0;display:grid;grid-template-columns:54px minmax(0,1fr);align-items:center;gap:.65rem;padding:.65rem .5rem}
 .list .idea:hover{background:#fafafa}
 .list .idea-visual{width:54px;height:54px;border-radius:7px;overflow:hidden}
 .list .idea-visual svg{width:22px;height:22px}
@@ -141,8 +143,6 @@ textarea{resize:vertical;min-height:4rem}
 @media(max-width:760px){.ideas:not(:empty){grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){
   .gift-entry{--card-inset:.75rem}
-  .list .idea{grid-template-columns:54px minmax(0,1fr)}
-  .list .card-purchase{grid-column:1 / -1}
   .wrap{padding:0 17px}.hero{margin-top:17px}.collection-head{align-items:flex-start;gap:.75rem;flex-wrap:wrap;padding-bottom:1rem}.tools{gap:6px}.views button{width:27px}.empty{min-height:160px}.ideas:not(:empty){gap:10px}.list .idea-info{padding:.5rem .65rem}.pair{grid-template-columns:1.3fr 1fr}}
 @media(max-width:365px){.pair{grid-template-columns:1fr;gap:0}.ideas:not(:empty){grid-template-columns:1fr}}
 .storage-note{color:#606064;font-size:var(--body);line-height:1.45;padding:0 0 1rem}

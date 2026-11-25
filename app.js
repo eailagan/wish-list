@@ -127,7 +127,7 @@ function makeCard(idea) {
     enablePhotoDrop(card, file => openCard(idea, {edit:true, file}));
   }
   if (shared) {
-    const action = make('button', 'card-purchase ' + (idea.boughtByYou ? 'secondary' : 'primary'),
+    const action = make('button', 'card-purchase secondary',
       idea.boughtByYou ? 'Undo purchase' : 'Mark as bought');
     action.type = 'button';
     action.dataset.id = idea.id;
