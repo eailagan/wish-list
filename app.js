@@ -134,7 +134,7 @@ function render() {
   const list = byId('ideas');
   const focusedPerson = document.activeElement?.dataset.person;
   const focusedId = document.activeElement?.dataset.id;
-  byId('collection-title').textContent = inside ? state.person : 'Family lists';
+  byId('collection-title').textContent = inside ? state.person : 'Family member';
   byId('all-people').hidden = !inside;
   byId('view-options').hidden = !inside;
   byId('known-people').replaceChildren(...state.people.map(name => new Option(name)));
