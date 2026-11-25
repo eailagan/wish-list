@@ -134,7 +134,7 @@ function makeCard(idea) {
     action.setAttribute('aria-description', idea.title);
     if (pendingCardPurchases.has(idea.id)) action.setAttribute('aria-disabled', 'true');
     action.addEventListener('click', () => changeCardPurchase(idea, action));
-    entry.append(action);
+    card.append(action);
   }
   return entry;
 }
