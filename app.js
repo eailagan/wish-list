@@ -23,6 +23,7 @@ const shared = Boolean(window.GIFTBOOK_API_ORIGIN);
 const api = (window.GIFTBOOK_API_ORIGIN || location.origin) + '/api/' + room + '/ideas';
 const state = {people: [], person: '', ideas: [], view: preference.get('view') === 'list' ? 'list' : 'grid', loading: true, error: false};
 let requestNumber = 0, cardRequest = 0;
+const pendingCardPurchases = new Set();
 let draft, selected, photoWork = 0, photoPending = false, saving = false, toastTimer;
 const editStorage = id => 'edit.' + room + '.' + id;
 const buyerStorage = id => 'buyer.' + room + '.' + id;
@@ -95,15 +96,17 @@ function displayImage(img, photo, link) {
 }
 
 function makeCard(idea) {
-  const button = make('button', 'idea');
-  button.dataset.id = idea.id;
+  const entry = make('article', 'gift-entry');
+  const card = make('div', 'idea');
   const visual = make('span', 'idea-visual');
   visual.append(icon('gift'));
+  entry.append(card);
   if (idea.hiddenPurchase) {
-    button.disabled = true;
-    button.classList.add('purchased-placeholder');
-    button.append(visual, make('span', 'idea-info', 'Purchased gift'));
-    return button;
+    card.classList.add('purchased-placeholder');
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-disabled', 'true');
+    card.append(visual, make('span', 'idea-info', 'Purchased gift'));
+    return entry;
   }
   if (idea.photo || idea.url) {
     const photo = make('img');
@@ -112,15 +115,28 @@ function makeCard(idea) {
     displayImage(photo, idea.photo, idea.url);
   }
   const info = make('span', 'idea-info');
-  info.append(make('span', 'idea-title', idea.title));
+  const open = make('button', 'idea-title', idea.title);
+  open.type = 'button';
+  open.dataset.id = idea.id;
+  open.addEventListener('click', () => openCard(idea));
+  info.append(open);
   if (idea.price !== null) info.append(make('span', 'idea-price', money(idea.price)));
   if (idea.boughtByYou) info.append(make('span', 'buyer-note', 'You bought this'));
-  button.append(visual, info);
-  button.addEventListener('click', () => openCard(idea));
+  card.append(visual, info);
   if (preference.get(editStorage(idea.id))) {
-    enablePhotoDrop(button, file => openCard(idea, {edit:true, file}));
+    enablePhotoDrop(card, file => openCard(idea, {edit:true, file}));
   }
-  return button;
+  if (shared) {
+    const action = make('button', 'card-purchase ' + (idea.boughtByYou ? 'secondary' : 'primary'),
+      idea.boughtByYou ? 'Undo purchase' : 'Mark as bought');
+    action.type = 'button';
+    action.dataset.id = idea.id;
+    action.setAttribute('aria-description', idea.title);
+    if (pendingCardPurchases.has(idea.id)) action.setAttribute('aria-disabled', 'true');
+    action.addEventListener('click', () => changeCardPurchase(idea, action));
+    entry.append(action);
+  }
+  return entry;
 }
 
 async function openCard(idea, {edit = false, file} = {}) {
@@ -173,6 +189,7 @@ function render() {
   const list = byId('ideas');
   const focusedPerson = document.activeElement?.dataset.person;
   const focusedId = document.activeElement?.dataset.id;
+  const focusedPurchase = document.activeElement?.classList.contains('card-purchase');
   byId('collection-title').textContent = inside ? state.person : 'Family member';
   byId('all-people').hidden = !inside;
   byId('view-options').hidden = !inside;
@@ -183,7 +200,10 @@ function render() {
   list.classList.toggle('list', state.view === 'list');
   list.replaceChildren(...(inside ? state.ideas.map(makeCard) : []));
   if (focusedPerson) [...people.querySelectorAll('button')].find(el => el.dataset.person === focusedPerson)?.focus({preventScroll:true});
-  if (focusedId) [...list.children].find(el => el.dataset.id === focusedId)?.focus({preventScroll:true});
+  if (focusedId) {
+    const controls = list.querySelectorAll(focusedPurchase ? '.card-purchase' : '.idea-title');
+    [...controls].find(el => el.dataset.id === focusedId)?.focus({preventScroll:true});
+  }
   byId('view-grid').setAttribute('aria-pressed', state.view === 'grid');
   byId('view-list').setAttribute('aria-pressed', state.view === 'list');
   const count = inside ? state.ideas.length : state.people.length;
@@ -276,20 +296,45 @@ const purchaseAction = byId('purchase-action');
 const purchaseStatus = byId('purchase-status');
 let purchaseRequest = 0;
 
-async function updatePurchase(method = 'GET') {
-  if (!purchase.open || !byId('detail').open) return;
-  const id = selected.id;
-  const version = ++purchaseRequest;
+function requestPurchase(id, method) {
   const storageKey = buyerStorage(id);
   let key = preference.get(storageKey);
   if (method === 'PUT' && !key) {
     key = randomKey();
     preference.set(storageKey, key);
   }
-  purchaseAction.disabled = true;
   const url = api.replace(/\/ideas$/, '/purchases/') + id;
+  return request(url, {method, headers: key ? {'X-Edit-Key':key} : {}});
+}
+
+async function changeCardPurchase(idea, button) {
+  if (pendingCardPurchases.has(idea.id)) return;
+  cardRequest++;
+  pendingCardPurchases.add(idea.id);
+  button.setAttribute('aria-disabled', 'true');
   try {
-    const result = await request(url, {method, headers: key ? {'X-Edit-Key':key} : {}});
+    const result = await requestPurchase(idea.id, idea.boughtByYou ? 'DELETE' : 'PUT');
+    const current = result.bought && !result.yours
+      ? {id:idea.id, created:idea.created, hiddenPurchase:true}
+      : {...idea, boughtByYou:result.yours};
+    state.ideas = state.ideas.map(item => item.id === idea.id ? current : item);
+    toast(result.yours ? 'Marked as bought.' : result.bought ? 'Someone already bought this gift.' : 'Purchase mark removed.');
+  } catch (error) {
+    toast(error.message === 'Failed to fetch' ? 'Couldn’t update the purchase. Try again.' : error.message);
+  } finally {
+    pendingCardPurchases.delete(idea.id);
+    render();
+    refresh();
+  }
+}
+
+async function updatePurchase(method = 'GET') {
+  if (!purchase.open || !byId('detail').open) return;
+  const id = selected.id;
+  const version = ++purchaseRequest;
+  purchaseAction.disabled = true;
+  try {
+    const result = await requestPurchase(id, method);
     if (method !== 'GET' || (result.bought && !result.yours)) refresh();
     if (version !== purchaseRequest) return;
     if (result.bought && !result.yours) {
